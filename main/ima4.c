@@ -5,14 +5,32 @@
 #include "driver/i2c_master.h"
 #include "esp_log.h" 
 
+// i2c4
 #define SDA_GPIO 21
 #define SCL_GPIO 22
 #define MPU_ADDR 0x68 // AD0 -> GND
+#define MPU6050_SCL_SPEED_HZ 100000 // 100kHz -> slow mode, 400kHz -> fast mode
+
+// registers
+#define MPU6050_WHO_AM_I_REG 0x75
+#define MPU6050_ACCEL_CFG_REG 0x1C
+#define MPU6050_AFS_SEL 0x00 // 0 -> +-2g
+#define MPU6050_PWR_MGMT1_REG 0x6B
+#define MPU6050_PWR_MGMT1_ARG 0x01 // enable PLL with X axis gyroscope reference
+
+// delays
+#define MPU6050_DELAY_WAKE_UP_MS 100 // wait after sensor wakes up
+
+
+// i2c transaction timeout
+#define MPU6050_XFER_TIMEOUT_MS 100
 
 static const char *TAG = "mpu6050";
 
-void app_main(void) {
-	// creating the bus
+static esp_err_t mpu6050_init (i2c_master_dev_handle_t *dev) {
+	esp_err_t err;
+	
+	// (1) creating the bus
 	i2c_master_bus_config_t bus_cfg = {
 		.i2c_port = I2C_NUM_0, 
 		.sda_io_num = SDA_GPIO, 
@@ -22,58 +40,70 @@ void app_main(void) {
 		.flags.enable_internal_pullup = true,
 	};
 	i2c_master_bus_handle_t bus;
-	ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &bus));
-	
-	
-	// checking if anyone is on the bus
-	for (uint8_t addr = 1; addr < 127; addr++) {
-		if (i2c_master_probe(bus, addr, 50) == ESP_OK) {
-			ESP_LOGI(TAG, "find device at 0x%02X (expected 0x68)", addr);
-		}
+	err = i2c_new_master_bus(&bus_cfg, &bus);
+	if (err != ESP_OK) {
+		return err;
 	}
 	
 	
-	// adding device 
+	// (2) adding device 
 	i2c_device_config_t dev_cfg = {
 		.dev_addr_length = I2C_ADDR_BIT_LEN_7, 
 		.device_address = MPU_ADDR, 
-		.scl_speed_hz = 400000, // 400kHz is max -> fast mode, 100kHz -> slow mode
+		.scl_speed_hz = MPU6050_SCL_SPEED_HZ,
 	};
-	i2c_master_dev_handle_t mpu;
-	ESP_ERROR_CHECK(i2c_master_bus_add_device(bus, &dev_cfg, &mpu));
-	
-	
-	// checking WHO_AM_I register
-	uint8_t reg = 0x75;
-	uint8_t who = 0;
-	
-	ESP_ERROR_CHECK(i2c_master_transmit_receive(mpu, &reg, 1, &who, 1, 100));
-	ESP_LOGI(TAG, "WHO_AM_I = 0x%02X", who);
-	
-	if (who != 0x68) {
-	    ESP_LOGE(TAG, "unexpected WHO_AM_I");
-	    return;
+	err = i2c_master_bus_add_device(bus, &dev_cfg, dev);
+	if (err != ESP_OK) {
+		return err;
 	}
 	
 	
-	// waking up the mpu and set gyro clk source
-	uint8_t wake [2] = {0x6B, 0x01};
+	// (3) checking WHO_AM_I register
+	uint8_t who_am_i_reg = MPU6050_WHO_AM_I_REG;
+	uint8_t who = 0;
+
+	err = i2c_master_transmit_receive(*dev, &who_am_i_reg, 1, &who, 1, MPU6050_XFER_TIMEOUT_MS);
+	if (err != ESP_OK) {
+		return err;
+	}
 	
-	ESP_ERROR_CHECK(i2c_master_transmit(mpu, wake, 2, 100));
-	vTaskDelay(pdMS_TO_TICKS(100)); // wait for sensor startup
+	if (who == MPU_ADDR) {
+		ESP_LOGI(TAG, "WHO_AM_I = 0x%02X", who);
+	} else 	{
+	    ESP_LOGW(TAG, "unexpected WHO_AM_I: 0x%02X", who);
+	}
 	
+	// (4) waking up the mpu and set gyro clk source
+	uint8_t wake [2] = {MPU6050_PWR_MGMT1_REG, MPU6050_PWR_MGMT1_ARG};
+
+	err = i2c_master_transmit(*dev, wake, 2, MPU6050_XFER_TIMEOUT_MS);
+	if (err != ESP_OK) {
+		return err;
+	}
+	vTaskDelay(pdMS_TO_TICKS(MPU6050_DELAY_WAKE_UP_MS)); // wait for sensor startup
+
+
+	// (5) set accel range to +-2g explicitly
+	uint8_t acc_cfg[2] = {MPU6050_ACCEL_CFG_REG, MPU6050_AFS_SEL};
+	err = i2c_master_transmit(*dev, acc_cfg, 2, MPU6050_XFER_TIMEOUT_MS);
+	if (err != ESP_OK) {
+		return err;
+	}
 	
-	// Set accel range to +-2g explicitly
-	uint8_t acc_cfg[2] = {0x1C, 0x00};
-	ESP_ERROR_CHECK(i2c_master_transmit(mpu, acc_cfg, 2, 100));
+	return ESP_OK;
 	
+}
+
+void app_main(void) {
+	i2c_master_dev_handle_t mpu1;
+	ESP_ERROR_CHECK(mpu6050_init(&mpu1));
 	
 	// get accell in loop
 	while (1) {
 		uint8_t start_reg = 0x3B;
 		uint8_t r[6];
 		
-		esp_err_t err = i2c_master_transmit_receive(mpu, &start_reg, 1, r, 6, 100);
+		esp_err_t err = i2c_master_transmit_receive(mpu1, &start_reg, 1, r, 6, 100);
 		
 		if (err == ESP_OK) {
 			int16_t rawX = (int16_t) ((r[0] << 8) | r[1]);
