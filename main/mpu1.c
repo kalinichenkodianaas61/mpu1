@@ -107,21 +107,18 @@ static esp_err_t mpu6050_read (i2c_master_dev_handle_t dev, float *gX, float *gY
 	uint8_t data[6];
 	esp_err_t err;
 	
-	// (1) delay before command 
-	//vTaskDelay(pdMS_TO_TICKS(MPU6050_DELAY_BEFORE_CMD_MS));
-	
-	// (2) read values
+	// (1) read values
 	err = i2c_master_transmit_receive(dev, &start_reg, 1, data, 6, 100);
 	if (err != ESP_OK) {
 		return err;
 	}
 	
-	// (3) combine bits
+	// (2) combine bits
 	int16_t rawX = (int16_t) ((data[0] << 8) | data[1]);
 	int16_t rawY = (int16_t) ((data[2] << 8) | data[3]);
 	int16_t rawZ = (int16_t) ((data[4] << 8) | data[5]);
 	
-	// (4) convert to real values
+	// (3) convert to real values
 	*gX = rawX / MPU6050_LSB_SENSITIVITY;
 	*gY = rawY / MPU6050_LSB_SENSITIVITY;
 	*gZ = rawZ / MPU6050_LSB_SENSITIVITY;
