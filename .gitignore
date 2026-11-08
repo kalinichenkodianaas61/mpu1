@@ -1,8 +1,8 @@
+build/
+.settings/
+.cache/
+sdkconfig.old
+managed_components/
 .project
 .cproject
 .clangd
-.settings/
-build/
-sdkconfig.old
-.vscode/
-managed_components/

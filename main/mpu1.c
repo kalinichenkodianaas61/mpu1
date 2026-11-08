@@ -17,9 +17,16 @@
 #define MPU6050_AFS_SEL 0x00 // 0 -> +-2g
 #define MPU6050_PWR_MGMT1_REG 0x6B
 #define MPU6050_PWR_MGMT1_ARG 0x01 // enable PLL with X axis gyroscope reference
+#define MPU6050_START_REG 0x3B 
+
+// conversion
+#define MPU6050_LSB_SENSITIVITY 16384.0f
+#define MPU6050_DP_NUMBER 2
 
 // delays
 #define MPU6050_DELAY_WAKE_UP_MS 100 // wait after sensor wakes up
+#define MPU6050_DELAY_BEFORE_CMD_MS 3000 
+#define MPU6050_PERIOD_MS 250
 
 
 // i2c transaction timeout
@@ -94,30 +101,61 @@ static esp_err_t mpu6050_init (i2c_master_dev_handle_t *dev) {
 	
 }
 
-void app_main(void) {
+
+static esp_err_t mpu6050_read (i2c_master_dev_handle_t dev, float *gX, float *gY, float *gZ) {
+	uint8_t start_reg = MPU6050_START_REG;
+	uint8_t data[6];
+	esp_err_t err;
+	
+	// (1) delay before command 
+	//vTaskDelay(pdMS_TO_TICKS(MPU6050_DELAY_BEFORE_CMD_MS));
+	
+	// (2) read values
+	err = i2c_master_transmit_receive(dev, &start_reg, 1, data, 6, 100);
+	if (err != ESP_OK) {
+		return err;
+	}
+	
+	// (3) combine bits
+	int16_t rawX = (int16_t) ((data[0] << 8) | data[1]);
+	int16_t rawY = (int16_t) ((data[2] << 8) | data[3]);
+	int16_t rawZ = (int16_t) ((data[4] << 8) | data[5]);
+	
+	// (4) convert to real values
+	*gX = rawX / MPU6050_LSB_SENSITIVITY;
+	*gY = rawY / MPU6050_LSB_SENSITIVITY;
+	*gZ = rawZ / MPU6050_LSB_SENSITIVITY;
+	
+	return ESP_OK;
+}
+
+
+
+
+void app_main(void) {	
 	i2c_master_dev_handle_t mpu1;
 	ESP_ERROR_CHECK(mpu6050_init(&mpu1));
 	
 	// get accell in loop
-	while (1) {
-		uint8_t start_reg = 0x3B;
-		uint8_t r[6];
+	while (1) {	
+		float gX = 0, gY = 0, gZ = 0;
 		
-		esp_err_t err = i2c_master_transmit_receive(mpu1, &start_reg, 1, r, 6, 100);
-		
-		if (err == ESP_OK) {
-			int16_t rawX = (int16_t) ((r[0] << 8) | r[1]);
-			int16_t rawY = (int16_t) ((r[2] << 8) | r[3]);
-			int16_t rawZ = (int16_t) ((r[4] << 8) | r[5]);
-			
-			ESP_LOGI(TAG, " raw: %6d %6d %6d | g: %+7.2f %+7.2f %+7.2f", 
-					rawX, rawY, rawZ,
-					rawX / 16384.0f, rawY / 16384.0f, rawZ / 16384.0f);
+		esp_err_t err = mpu6050_read(mpu1, &gX, &gY, &gZ);
+		if (err != ESP_OK) {
+			ESP_LOGW(TAG, "accel read failed: %s", esp_err_to_name(err));
 		} else {
-			ESP_LOGE(TAG, "accel read failed: %s", esp_err_to_name(err));
+			ESP_LOGI(TAG, "gX: %+7.*f | gY: %+7.*f | gZ: %+7.*f",
+				MPU6050_DP_NUMBER, gX, 
+				MPU6050_DP_NUMBER, gY, 
+				MPU6050_DP_NUMBER, gZ);
 		}
-		
-		vTaskDelay(pdMS_TO_TICKS(500));
+			
+		vTaskDelay(pdMS_TO_TICKS(MPU6050_PERIOD_MS));
 	}
+	
 
 }
+
+
+
+
